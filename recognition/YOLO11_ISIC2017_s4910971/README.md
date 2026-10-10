@@ -46,6 +46,19 @@ python3 scripts/download_assets.py
 python3 scripts/verify_assets.py
 ```
 
+To run verification only after downloading and extraction succeed:
+
+```bash
+python3 scripts/download_assets.py --connections 32 && python3 scripts/verify_assets.py
+```
+
+`--connections` controls concurrent HTTP ranges per large archive (default 16,
+allowed 1–64). More connections do not guarantee higher throughput. Existing
+completed ranges are retained when restarting. Do not run multiple downloaders
+against the same workspace simultaneously. Successful full verification writes
+`output/setup_verification.json` under the workspace root; a partial download
+is not a passed verification.
+
 The downloader resumes partial files, checks response sizes, records SHA256
 hashes, verifies the official model SHA256, and checks CRCs during ZIP extraction.
 The dataset SHA256 values record provenance; they are not published reference
@@ -102,4 +115,3 @@ model result.
 
 Preserve the downloaded dataset attribution/license files. Ultralytics has its
 own software/model licensing; the course repository license does not replace it.
-

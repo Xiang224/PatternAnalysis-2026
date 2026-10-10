@@ -108,7 +108,7 @@ def segmented_download(url, destination, expected_size, connections=16):
         os.close(fd)
     partial.rename(destination)
 
-def download(url, destination, expected_sha=None):
+def download(url, destination, expected_sha=None, connections=16):
     destination.parent.mkdir(parents=True, exist_ok=True)
     with urllib.request.urlopen(urllib.request.Request(url, method='HEAD'), timeout=60) as response:
         expected_size = int(response.headers['Content-Length'])
@@ -119,7 +119,7 @@ def download(url, destination, expected_sha=None):
             raise ValueError(f'Existing file has unexpected size; inspect before replacing: {destination}')
         log(f'Already downloaded: {destination.name}')
     elif expected_size > 100*1024*1024:
-        segmented_download(url,destination,expected_size)
+        segmented_download(url,destination,expected_size,connections=connections)
     else:
         for attempt in range(1, 6):
             offset = partial.stat().st_size if partial.exists() else 0
@@ -199,7 +199,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--workspace-root', type=Path, default=Path(__file__).resolve().parents[4])
     parser.add_argument('--workers', type=int, default=4)
+    parser.add_argument('--connections', type=int, default=16,
+                        help='Parallel HTTP ranges per large archive (1-64)')
     args = parser.parse_args()
+    if args.workers < 1 or not 1 <= args.connections <= 64:
+        parser.error('--workers must be positive and --connections must be 1-64')
     root = args.workspace_root.resolve()
     raw = root/'data/ISIC2017'
     archives = raw/'archives'
@@ -209,7 +213,7 @@ def main():
     jobs.insert(0, (WEIGHTS_URL, root/'weights/yolo11n.pt', WEIGHTS_SHA256))
     records = []
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = [pool.submit(download,*job) for job in jobs]
+        futures = [pool.submit(download,*job,connections=args.connections) for job in jobs]
         for future in as_completed(futures):
             records.append(future.result())
             manifest = {'created_utc': datetime.now(timezone.utc).isoformat(), 'complete': False,
