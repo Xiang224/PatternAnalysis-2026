@@ -1,0 +1,17 @@
+# Course policy: keep datasets, downloaded archives and model weights out of Git.
+data/
+datasets/
+weights/
+runs/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.zip
+*.part
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.DS_Store
+
