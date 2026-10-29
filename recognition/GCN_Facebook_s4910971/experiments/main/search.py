@@ -25,7 +25,7 @@ OUT = ROOT / "experiments" / "main" / "search_results"
 
 
 # Fixed training settings and search ranges.
-SEED = 42
+SEED = 0
 EPOCHS = 200
 DEPTHS = [2, 3, 4, 6, 8]
 WIDTHS = [16, 32, 64]
