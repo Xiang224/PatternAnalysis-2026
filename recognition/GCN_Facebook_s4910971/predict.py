@@ -16,7 +16,7 @@ from modules import GCN, normalise_edges
 
 # Default model when --model is not supplied.
 ROOT = Path(__file__).resolve().parent
-MODEL = ROOT / "training_results" / "gcn_20261029_201102" / "model.pt"
+MODEL = ROOT / "training_results" / "gcn_20261030_002758" / "model.pt"
 CLASSES = ["company", "government", "politician", "tvshow"]
 
 WARMUP = 20
@@ -28,6 +28,7 @@ def main():
     # Select a checkpoint from the run parameters.
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=Path, default=MODEL)
+    parser.add_argument("--threshold", type=float, default=0.8)
     args = parser.parse_args()
     path = ROOT / args.model
     folder = path.parent / "prediction"
@@ -105,6 +106,23 @@ def main():
 
 
 
+    # Save low-confidence validation and test predictions.
+    with (folder / "low_confidence.csv").open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["node", "split", "true", "pred", "confidence"])
+
+        for split, mask in [("val", data.val_mask), ("test", data.test_mask)]:
+            nodes = mask.cpu().nonzero(as_tuple=True)[0].tolist()
+            for node in nodes:
+                confidence = float(prob[node].max())
+                if confidence < args.threshold:
+                    writer.writerow([
+                        node, split, CLASSES[int(y[node])], CLASSES[int(pred[node])],
+                        confidence,
+                    ])
+
+
+
     # Extract the last hidden layer. Dropout is off during evaluation.
     with torch.no_grad():
         source, target, coef = normalise_edges(data.edge_index, data.num_nodes, data.x.dtype)
@@ -127,6 +145,7 @@ def main():
         f.write(f"Model: {path.parent.name}\n")
         f.write(f"Device: {device}\n")
         f.write(f"Inference (ms/graph): {ms:.4f}\n")
+        f.write(f"Threshold: {args.threshold}\n")
 
 
 
