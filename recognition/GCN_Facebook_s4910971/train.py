@@ -1,0 +1,183 @@
+"""Train one GCN and save its settings, history, cost and weights."""
+
+import csv
+import platform
+from datetime import datetime
+from importlib.metadata import version
+from pathlib import Path
+from time import perf_counter
+
+import torch
+import torch.nn.functional as F
+from sklearn.metrics import f1_score
+
+from dataset import load_graph
+from modules import GCN
+
+
+
+# Folders relative to this file.
+ROOT = Path(__file__).resolve().parent
+DATA = ROOT / "data" / "facebook.npz"
+PARAM_FILE = ROOT / "experiments" / "main" / "search_results" / "best_params.txt"
+OUT = ROOT / "training_results"
+
+
+# True: read search results. False: use the custom parameters below.
+USE_SEARCH = True
+PARAMS = {
+    "depth": 4,
+    "hidden_dim": 64,
+    "learning_rate": 0.005,
+    "dropout": 0.2,
+    "weight_decay": 0.0,
+}
+
+SEED = 0
+EPOCHS = 200
+
+
+
+def metrics(out, y):
+    pred = out.argmax(dim=1)
+    loss = F.cross_entropy(out, y).item()
+    acc = (pred == y).float().mean().item()
+    f1 = f1_score(y.cpu(), pred.cpu(), labels=[0, 1, 2, 3],
+                  average="macro", zero_division=0)
+    return loss, acc, f1
+
+
+
+def main():
+    # Read the five parameters, or keep the custom values.
+    params = PARAMS.copy()
+    source = "Custom values in train.py"
+    if USE_SEARCH:
+        source = str(PARAM_FILE.relative_to(ROOT))
+        for line in PARAM_FILE.read_text(encoding="utf-8").splitlines():
+            if "=" in line:
+                name, value = line.split("=", 1)
+                name = name.strip()
+                if name in params:
+                    params[name] = float(value)
+        params["depth"] = int(params["depth"])
+        params["hidden_dim"] = int(params["hidden_dim"])
+
+
+
+    # Load the whole graph with the fixed training/validation/test split.
+    torch.manual_seed(SEED)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    data = load_graph(DATA, seed=SEED).to(device)
+    run = OUT / f"gcn_{datetime.now():%Y%m%d_%H%M%S}"
+    run.mkdir(parents=True)
+
+
+
+    # Build the model and Adam optimiser.
+    model = GCN(data.num_node_features, params["hidden_dim"],
+                params["depth"], params["dropout"]).to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=params["learning_rate"],
+                           weight_decay=params["weight_decay"])
+    count = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+
+
+    # Save the settings actually used for this run.
+    with (run / "params.txt").open("w", encoding="utf-8") as f:
+        f.write(f"Source: {source}\n")
+
+        for name, value in params.items():
+            f.write(f"{name}: {value}\n")
+
+        f.write(f"\nEpochs: {EPOCHS}\n")
+        f.write(f"Seed: {SEED}\n")
+        f.write("Batch: full batch\n")
+        f.write("Optimiser: Adam\n")
+        f.write("Loss: cross-entropy (unweighted)\n")
+
+        f.write("\nSetting: transductive\n")
+        f.write("Split: 70/10/20 (train/val/test)\n")
+        f.write(f"Train nodes: {data.train_mask.sum().item()}\n")
+        f.write(f"Val nodes: {data.val_mask.sum().item()}\n")
+        f.write(f"Test nodes: {data.test_mask.sum().item()}\n")
+
+        f.write("\nCheckpoint: final epoch\n")
+        f.write("Early stopping: no\n")
+
+    # Start timing and GPU memory recording after setup.
+    if device == "cuda":
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+    start = perf_counter()
+
+
+
+    # Train for the fixed number of epochs and save each epoch's metrics.
+    columns = ["epoch", "train_loss", "train_accuracy", "train_macro_f1",
+               "val_loss", "val_accuracy", "val_macro_f1", "epoch_seconds"]
+    with (run / "history.csv").open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(columns)
+
+        for epoch in range(1, EPOCHS + 1):
+            step = perf_counter()
+            model.train()
+            opt.zero_grad()
+            out = model(data.x, data.edge_index)
+            loss = F.cross_entropy(out[data.train_mask], data.y[data.train_mask])
+            loss.backward()
+            opt.step()
+
+
+            # Evaluate both splits with dropout disabled after the update.
+            model.eval()
+            with torch.no_grad():
+                out = model(data.x, data.edge_index)
+                train = metrics(out[data.train_mask], data.y[data.train_mask])
+                val = metrics(out[data.val_mask], data.y[data.val_mask])
+
+            if device == "cuda":
+                torch.cuda.synchronize()
+            seconds = perf_counter() - step
+            writer.writerow([epoch, *train, *val, seconds])
+            f.flush()
+
+    seconds = perf_counter() - start
+
+
+
+
+    # Save the final weights and the information needed to rebuild the model.
+    torch.save({
+        "weights": model.state_dict(),
+        "params": params,
+        "seed": SEED,
+        "epochs": EPOCHS,
+    }, run / "model.pt")
+
+
+
+    # Save training cost and software versions. MB uses 1,000,000 bytes.
+    memory = 0.0
+    name = platform.processor()
+    if device == "cuda":
+        memory = torch.cuda.max_memory_allocated() / 1_000_000
+        name = torch.cuda.get_device_name()
+
+    with (run / "train_info.txt").open("w", encoding="utf-8") as f:
+        f.write(f"Device: {device} ({name})\n")
+        f.write(f"Trainable parameters: {count}\n")
+        f.write(f"Training and validation time (seconds): {seconds:.4f}\n")
+        f.write(f"Peak PyTorch GPU allocation (MB): {memory:.2f}\n")
+        f.write("Timing includes per-epoch evaluation; excludes loading and saving weights.\n")
+        f.write("GPU allocation excludes driver/context memory; CPU runs report 0.\n")
+        f.write(f"Python: {platform.python_version()}\nPyTorch: {torch.__version__}\n")
+        f.write(f"CUDA build: {torch.version.cuda}\n")
+        for package in ["torch-geometric", "numpy", "scikit-learn"]:
+            f.write(f"{package}: {version(package)}\n")
+
+
+if __name__ == "__main__":
+    main()
