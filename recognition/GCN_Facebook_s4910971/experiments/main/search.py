@@ -2,7 +2,6 @@
 
 import csv
 import sys
-from datetime import datetime
 from itertools import product
 from pathlib import Path
 
@@ -22,7 +21,7 @@ from modules import GCN
 
 # Data and output folders.
 DATA = ROOT / "data" / "facebook.npz"
-RUNS = ROOT / "results" / "main"
+OUT = ROOT / "experiments" / "main" / "search_results"
 
 
 # Fixed training settings and search ranges.
@@ -78,11 +77,10 @@ def train_one(data, device, depth, width, lr, drop, wd):
 
 
 def main():
-    # Load the fixed graph and create a new output folder.
+    # Load the fixed graph and create the output folder.
     device = "cuda" if torch.cuda.is_available() else "cpu"
     data = load_graph(DATA, seed=SEED).to(device)
-    run = RUNS / f"gcn_search_{datetime.now():%Y%m%d_%H%M%S}"
-    run.mkdir(parents=True)
+    OUT.mkdir(parents=True, exist_ok=True)
 
     columns = [
         "depth", "hidden_dim", "learning_rate", "dropout", "weight_decay",
@@ -92,7 +90,7 @@ def main():
 
 
     # Train all combinations and save one row for each.
-    with (run / "summary.csv").open("w", newline="", encoding="utf-8") as f:
+    with (OUT / "summary.csv").open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=columns)
         writer.writeheader()
 
@@ -112,7 +110,7 @@ def main():
 
 
     # Save readable parameters for manual use in train.py.
-    with (run / "best_params.txt").open("w", encoding="utf-8") as f:
+    with (OUT / "best_params.txt").open("w", encoding="utf-8") as f:
         f.write("Selection: highest final-epoch validation macro F1; ties use lower validation loss.\n")
         f.write(f"Epochs per combination: {EPOCHS}\nSeed: {SEED}\n")
         f.write("Split: 70% training / 10% validation / 20% test\nOptimizer: Adam\n")
@@ -124,7 +122,7 @@ def main():
 
     print(f"Best: depth={best['depth']}, width={best['hidden_dim']}, "
           f"lr={best['learning_rate']}, dropout={best['dropout']}, wd={best['weight_decay']}")
-    print(f"Saved: {run}")
+    print(f"Saved: {OUT}")
 
 
 
