@@ -1,129 +1,127 @@
+"""Search MLP parameters and save validation results."""
 
-"""Search 27 MLP configurations using validation scores only."""
-
-import argparse
 import csv
-import json
 import sys
-import time
-from datetime import datetime
+from itertools import product
 from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from sklearn.metrics import precision_recall_fscore_support
-from sklearn.model_selection import ParameterGrid
+from sklearn.metrics import f1_score
 
-PROJECT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(PROJECT))
+
+# Import the model and data loader from the project folder.
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
 
 from dataset import load_graph
 from experiments.baseline.model import MLP
 
 
-DATA_FILE = PROJECT / "data" / "facebook.npz"
-RUNS_FOLDER = PROJECT / "results" / "baseline"
-PARAMETERS = {
-    "hidden_dim": [16, 32, 64],
-    "learning_rate": [0.005, 0.01, 0.02],
-    "dropout": [0.2, 0.5, 0.7],
-}
+
+# Data and output folders.
+DATA = ROOT / "data" / "facebook.npz"
+OUT = ROOT / "experiments" / "baseline" / "search_results"
+
+
+# Fixed training settings and search ranges.
+SEED = 0
 EPOCHS = 200
-SEED = 42
+WIDTHS = [16, 32, 64]
+LRS = [0.005, 0.01, 0.02]
+DROPS = [0.2, 0.5, 0.7]
+WD = 0.0005
+
+
+
+def train_one(data, device, width, lr, drop):
+    # Create a model with the same seed for each combination.
+    torch.manual_seed(SEED)
+    model = MLP(data.num_node_features, width, 4, drop).to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=WD)
+
+
+    # Train using training-node labels only.
+    model.train()
+    for epoch in range(EPOCHS):
+        opt.zero_grad()
+        out = model(data.x)
+        loss = F.cross_entropy(out[data.train_mask], data.y[data.train_mask])
+        loss.backward()
+        opt.step()
+
+
+    # Evaluate the final epoch on validation nodes.
+    model.eval()
+    with torch.no_grad():
+        out = model(data.x)[data.val_mask]
+        y = data.y[data.val_mask]
+        pred = out.argmax(dim=1)
+        loss = F.cross_entropy(out, y).item()
+        acc = (pred == y).float().mean().item()
+        f1 = f1_score(y.cpu(), pred.cpu(), labels=[0, 1, 2, 3],
+                      average="macro", zero_division=0)
+
+    return {
+        "hidden_dim": width,
+        "learning_rate": lr,
+        "dropout": drop,
+        "weight_decay": WD,
+        "val_accuracy": acc,
+        "val_macro_f1": f1,
+        "val_loss": loss,
+    }
+
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data", type=Path, default=DATA_FILE)
-    parser.add_argument("--runs", type=Path, default=RUNS_FOLDER)
-    parser.add_argument("--epochs", type=int, default=EPOCHS)
-    args = parser.parse_args()
-
+    # Load the fixed graph and create the output folder.
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    graph = load_graph(args.data, seed=SEED).to(device)
-    run_dir = args.runs / f"mlp3_gridsearch_{datetime.now():%Y%m%d_%H%M%S}"
-    run_dir.mkdir(parents=True, exist_ok=False)
+    data = load_graph(DATA, seed=SEED).to(device)
+    OUT.mkdir(parents=True, exist_ok=True)
 
-    settings = {"layers": 3, "parameters": PARAMETERS, "epochs": args.epochs, "seed": SEED,
-                "split": "70/10/20", "selection": f"epoch-{args.epochs} validation macro F1",
-                "weight_decay": 0.0005, "device": device}
-    (run_dir / "settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
-
-    fields = ["trial", "hidden_dim", "learning_rate", "dropout", "epochs",
-              "val_accuracy", "val_macro_precision", "val_macro_recall", "val_macro_f1",
-              "val_loss", "training_seconds", "peak_gpu_memory_mib", "parameters"]
+    columns = [
+        "hidden_dim", "learning_rate", "dropout", "weight_decay",
+        "val_accuracy", "val_macro_f1", "val_loss",
+    ]
     best = None
 
-    with (run_dir / "summary.csv").open("w", newline="", encoding="utf-8") as summary_file, \
-         (run_dir / "history.csv").open("w", newline="", encoding="utf-8") as history_file:
-        summary = csv.DictWriter(summary_file, fieldnames=fields)
-        history = csv.writer(history_file)
-        summary.writeheader()
-        history.writerow(["trial", "epoch", "train_loss", "val_loss", "val_accuracy", "val_macro_f1"])
 
-        for trial, params in enumerate(ParameterGrid(PARAMETERS), start=1):
-            torch.manual_seed(SEED)
-            model = MLP(graph.num_node_features, params["hidden_dim"], 4, params["dropout"]).to(device)
-            optimizer = torch.optim.Adam(model.parameters(), lr=params["learning_rate"], weight_decay=0.0005)
+    # Train all combinations and save one row for each.
+    with (OUT / "summary.csv").open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=columns)
+        writer.writeheader()
 
-            if device == "cuda":
-                torch.cuda.reset_peak_memory_stats()
-                torch.cuda.synchronize()
-            start = time.perf_counter()
+        for width, lr, drop in product(WIDTHS, LRS, DROPS):
+            row = train_one(data, device, width, lr, drop)
+            writer.writerow(row)
+            f.flush()
 
-            for epoch in range(1, args.epochs + 1):
-                model.train()
-                optimizer.zero_grad()
-                scores = model(graph.x)
-                train_loss = F.cross_entropy(scores[graph.train_mask], graph.y[graph.train_mask])
-                train_loss.backward()
-                optimizer.step()
+            # Prefer higher macro F1, then lower loss if F1 is equal.
+            if best is None:
+                best = row
+            elif row["val_macro_f1"] > best["val_macro_f1"]:
+                best = row
+            elif row["val_macro_f1"] == best["val_macro_f1"]:
+                if row["val_loss"] < best["val_loss"]:
+                    best = row
 
-                model.eval()
-                with torch.no_grad():
-                    scores = model(graph.x)[graph.val_mask]
-                    labels = graph.y[graph.val_mask]
-                    predictions = scores.argmax(dim=1)
-                    val_loss = F.cross_entropy(scores, labels).item()
-                    val_accuracy = (predictions == labels).float().mean().item()
-                    precision, recall, f1, _ = precision_recall_fscore_support(
-                        labels.cpu(), predictions.cpu(), labels=[0, 1, 2, 3], zero_division=0
-                    )
-                    val_macro_precision = float(precision.mean())
-                    val_macro_recall = float(recall.mean())
-                    val_macro_f1 = float(f1.mean())
 
-                history.writerow([trial, epoch, train_loss.item(), val_loss, val_accuracy, val_macro_f1])
+    # Save parameters for train.py.
+    with (OUT / "best_params.txt").open("w", encoding="utf-8") as f:
+        f.write("Selection: highest final-epoch validation macro F1; ties use lower validation loss.\n")
+        f.write(f"Epochs per combination: {EPOCHS}\nSeed: {SEED}\n")
+        f.write("Split: 70% training / 10% validation / 20% test\nOptimizer: Adam\n")
+        f.write(f"Hidden widths searched: {WIDTHS}\n")
+        f.write(f"Learning rates searched: {LRS}\nDropouts searched: {DROPS}\n")
+        f.write(f"Weight decay: {WD}\n\n")
+        for name, value in best.items():
+            f.write(f"{name} = {value}\n")
 
-            if device == "cuda":
-                torch.cuda.synchronize()
-                memory = torch.cuda.max_memory_allocated() / (1024 * 1024)
-            else:
-                memory = None
+    print(f"Best: width={best['hidden_dim']}, "
+          f"lr={best['learning_rate']}, dropout={best['dropout']}, wd={best['weight_decay']}")
+    print(f"Saved: {OUT}")
 
-            result = {
-                "trial": trial, **params, "epochs": args.epochs,
-                "val_accuracy": val_accuracy,
-                "val_macro_precision": val_macro_precision,
-                "val_macro_recall": val_macro_recall,
-                "val_macro_f1": val_macro_f1,
-                "val_loss": val_loss,
-                "training_seconds": time.perf_counter() - start,
-                "peak_gpu_memory_mib": memory,
-                "parameters": sum(p.numel() for p in model.parameters()),
-            }
-            summary.writerow(result)
-            summary_file.flush()
-            history_file.flush()
-
-            if best is None or (result["val_macro_f1"], -result["val_loss"]) > (best["val_macro_f1"], -best["val_loss"]):
-                best = result
-                torch.save(model.state_dict(), run_dir / "best.pt")
-                (run_dir / "best.json").write_text(json.dumps(best, indent=2), encoding="utf-8")
-
-    print(f"Best configuration: hidden={best['hidden_dim']}, lr={best['learning_rate']}, "
-          f"dropout={best['dropout']}; validation macro F1={best['val_macro_f1']:.4f}")
-    print(f"Results folder: {run_dir}")
 
 
 if __name__ == "__main__":

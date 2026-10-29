@@ -1,94 +1,181 @@
-"""Train the selected MLP configuration without evaluating test labels."""
+"""Train one MLP and save its settings, history, cost and weights."""
 
-import argparse
 import csv
-import json
+import platform
 import sys
-import time
 from datetime import datetime
+from importlib.metadata import version
 from pathlib import Path
+from time import perf_counter
 
 import torch
 import torch.nn.functional as F
+from sklearn.metrics import f1_score
 
-PROJECT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(PROJECT))
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
 from dataset import load_graph
 from experiments.baseline.model import MLP
 
 
-DATA_FILE = PROJECT / "data" / "facebook.npz"
-RUNS_FOLDER = PROJECT / "results" / "baseline"
+
+# Folders relative to this file.
+DATA = ROOT / "data" / "facebook.npz"
+PARAM_FILE = ROOT / "experiments" / "baseline" / "search_results" / "best_params.txt"
+OUT = ROOT / "training_results"
 
 
-def macro_f1(actual, predicted):
-    confusion = torch.bincount(actual * 4 + predicted, minlength=16).reshape(4, 4)
-    tp = confusion.diag().float()
-    precision = tp / confusion.sum(dim=0).clamp(min=1)
-    recall = tp / confusion.sum(dim=1).clamp(min=1)
-    return (2 * precision * recall / (precision + recall).clamp(min=1e-12)).mean().item()
+# True: read search results. False: use the custom parameters below.
+USE_SEARCH = True
+PARAMS = {
+    "hidden_dim": 64,
+    "learning_rate": 0.01,
+    "dropout": 0.2,
+    "weight_decay": 0.0005,
+}
+
+SEED = 0
+EPOCHS = 200
+
+
+
+def metrics(out, y):
+    pred = out.argmax(dim=1)
+    loss = F.cross_entropy(out, y).item()
+    acc = (pred == y).float().mean().item()
+    f1 = f1_score(y.cpu(), pred.cpu(), labels=[0, 1, 2, 3],
+                  average="macro", zero_division=0)
+    return loss, acc, f1
+
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data", type=Path, default=DATA_FILE)
-    parser.add_argument("--runs", type=Path, default=RUNS_FOLDER)
-    parser.add_argument("--epochs", type=int, default=200)
-    args = parser.parse_args()
+    # Read the search parameters, or keep the custom values.
+    params = PARAMS.copy()
+    source = "Custom values in experiments/baseline/train.py"
+    if USE_SEARCH:
+        source = str(PARAM_FILE.relative_to(ROOT))
+        for line in PARAM_FILE.read_text(encoding="utf-8").splitlines():
+            if "=" in line:
+                name, value = line.split("=", 1)
+                name = name.strip()
+                if name in params:
+                    params[name] = float(value)
+        params["hidden_dim"] = int(params["hidden_dim"])
 
-    torch.manual_seed(42)
+
+
+    # Load the whole graph with the fixed training/validation/test split.
+    torch.manual_seed(SEED)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    graph = load_graph(args.data, seed=42).to(device)
-    model = MLP(graph.num_node_features, 64, 4, 0.2).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=0.0005)
-    output = args.runs / f"baseline_train_{datetime.now():%Y%m%d_%H%M%S}"
-    output.mkdir(parents=True, exist_ok=False)
-    history = []
+    data = load_graph(DATA, seed=SEED).to(device)
+    run = OUT / f"mlp_{datetime.now():%Y%m%d_%H%M%S}"
+    run.mkdir(parents=True)
 
+
+
+    # Build the model and Adam optimiser.
+    model = MLP(data.num_node_features, params["hidden_dim"], 4,
+                params["dropout"]).to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=params["learning_rate"],
+                           weight_decay=params["weight_decay"])
+    count = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+
+
+    # Save the settings actually used for this run.
+    with (run / "params.txt").open("w", encoding="utf-8") as f:
+        f.write(f"Source: {source}\n")
+
+        for name, value in params.items():
+            f.write(f"{name}: {value}\n")
+
+        f.write(f"\nEpochs: {EPOCHS}\n")
+        f.write(f"Seed: {SEED}\n")
+        f.write("Batch: full batch\n")
+        f.write("Optimiser: Adam\n")
+        f.write("Loss: cross-entropy (unweighted)\n")
+
+        f.write("\nLayers: 3\nInput: node features only\n")
+        f.write("Split: 70/10/20 (train/val/test)\n")
+        f.write(f"Train nodes: {data.train_mask.sum().item()}\n")
+        f.write(f"Val nodes: {data.val_mask.sum().item()}\n")
+        f.write(f"Test nodes: {data.test_mask.sum().item()}\n")
+
+        f.write("\nCheckpoint: final epoch\n")
+        f.write("Early stopping: no\n")
+
+    # Start timing and GPU memory recording after setup.
     if device == "cuda":
+        torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
-        torch.cuda.synchronize()
-    start = time.perf_counter()
+    start = perf_counter()
 
-    for epoch in range(1, args.epochs + 1):
-        model.train()
-        optimizer.zero_grad()
-        scores = model(graph.x)
-        train_loss = F.cross_entropy(scores[graph.train_mask], graph.y[graph.train_mask])
-        train_loss.backward()
-        optimizer.step()
 
-        model.eval()
-        with torch.no_grad():
-            scores = model(graph.x)[graph.val_mask]
-            actual = graph.y[graph.val_mask]
-            predicted = scores.argmax(dim=1)
-            val_loss = F.cross_entropy(scores, actual).item()
-            val_accuracy = (predicted == actual).float().mean().item()
-            val_f1 = macro_f1(actual, predicted)
-        history.append([epoch, train_loss.item(), val_loss, val_accuracy, val_f1])
 
+    # Train for the fixed number of epochs and save each epoch's metrics.
+    columns = ["epoch", "train_loss", "train_accuracy", "train_macro_f1",
+               "val_loss", "val_accuracy", "val_macro_f1", "epoch_seconds"]
+    with (run / "history.csv").open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(columns)
+
+        for epoch in range(1, EPOCHS + 1):
+            step = perf_counter()
+            model.train()
+            opt.zero_grad()
+            out = model(data.x)
+            loss = F.cross_entropy(out[data.train_mask], data.y[data.train_mask])
+            loss.backward()
+            opt.step()
+
+
+            # Evaluate both splits with dropout disabled after the update.
+            model.eval()
+            with torch.no_grad():
+                out = model(data.x)
+                train = metrics(out[data.train_mask], data.y[data.train_mask])
+                val = metrics(out[data.val_mask], data.y[data.val_mask])
+
+            if device == "cuda":
+                torch.cuda.synchronize()
+            seconds = perf_counter() - step
+            writer.writerow([epoch, *train, *val, seconds])
+            f.flush()
+
+    seconds = perf_counter() - start
+
+
+
+
+    # Save the final weights and the information needed to rebuild the model.
+    torch.save({
+        "weights": model.state_dict(),
+        "params": params,
+        "seed": SEED,
+        "epochs": EPOCHS,
+    }, run / "model.pt")
+
+
+
+    # Save training cost and software versions. MB uses 1,000,000 bytes.
+    memory = 0.0
+    name = platform.processor()
     if device == "cuda":
-        torch.cuda.synchronize()
-        peak_memory_mib = torch.cuda.max_memory_allocated() / (1024 * 1024)
-    else:
-        peak_memory_mib = None
-    training_seconds = time.perf_counter() - start
+        memory = torch.cuda.max_memory_allocated() / 1_000_000
+        name = torch.cuda.get_device_name()
 
-    with (output / "history.csv").open("w", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file)
-        writer.writerow(["epoch", "train_loss", "val_loss", "val_accuracy", "val_macro_f1"])
-        writer.writerows(history)
-    torch.save({"model": "baseline", "weights": model.state_dict(), "hidden_dim": 64,
-                "dropout": 0.2, "learning_rate": 0.01, "weight_decay": 0.0005,
-                "epoch": args.epochs, "seed": 42}, output / "last.pt")
-    (output / "validation_result.json").write_text(json.dumps({
-        "val_accuracy": val_accuracy, "val_macro_f1": val_f1,
-        "training_seconds": training_seconds, "peak_gpu_memory_mib": peak_memory_mib,
-        "parameters": sum(p.numel() for p in model.parameters()),
-    }, indent=2), encoding="utf-8")
-    print(f"Validation accuracy: {val_accuracy:.2%}, macro F1: {val_f1:.2%}")
-    print(f"Training results: {output}")
+    with (run / "train_info.txt").open("w", encoding="utf-8") as f:
+        f.write(f"Device: {device} ({name})\n")
+        f.write(f"Trainable parameters: {count}\n")
+        f.write(f"Training and validation time (seconds): {seconds:.4f}\n")
+        f.write(f"Peak PyTorch GPU allocation (MB): {memory:.2f}\n")
+        f.write(f"Python: {platform.python_version()}\nPyTorch: {torch.__version__}\n")
+        f.write(f"CUDA build: {torch.version.cuda}\n")
+        for package in ["torch-geometric", "numpy", "scikit-learn"]:
+            f.write(f"{package}: {version(package)}\n")
 
 
 if __name__ == "__main__":
