@@ -2,6 +2,7 @@
 
 import csv
 import platform
+from copy import deepcopy
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
@@ -34,7 +35,7 @@ PARAMS = {
 }
 
 SEED = 0
-EPOCHS = 200
+EPOCHS = 300
 
 
 
@@ -103,7 +104,7 @@ def main():
         f.write(f"Val nodes: {data.val_mask.sum().item()}\n")
         f.write(f"Test nodes: {data.test_mask.sum().item()}\n")
 
-        f.write("\nCheckpoint: final epoch\n")
+        f.write("\nCheckpoint: best validation macro F1; ties use lower loss\n")
         f.write("Early stopping: no\n")
 
     # Start timing and GPU memory recording after setup.
@@ -115,6 +116,8 @@ def main():
 
 
     # Train for the fixed number of epochs and save each epoch's metrics.
+    best_f1 = -1
+    best_loss = float("inf")
     columns = ["epoch", "train_loss", "train_accuracy", "train_macro_f1",
                "val_loss", "val_accuracy", "val_macro_f1", "epoch_seconds"]
     with (run / "history.csv").open("w", newline="", encoding="utf-8") as f:
@@ -138,6 +141,13 @@ def main():
                 train = metrics(out[data.train_mask], data.y[data.train_mask])
                 val = metrics(out[data.val_mask], data.y[data.val_mask])
 
+            # Keep an independent copy of the best validation weights.
+            if val[2] > best_f1 or (val[2] == best_f1 and val[0] < best_loss):
+                best_f1 = val[2]
+                best_loss = val[0]
+                best_epoch = epoch
+                best_weights = deepcopy(model.state_dict())
+
             if device == "cuda":
                 torch.cuda.synchronize()
             seconds = perf_counter() - step
@@ -149,13 +159,17 @@ def main():
 
 
 
-    # Save the final weights and the information needed to rebuild the model.
+    # Save the best weights and the information needed to rebuild the model.
     torch.save({
-        "weights": model.state_dict(),
+        "weights": best_weights,
         "params": params,
         "seed": SEED,
         "epochs": EPOCHS,
+        "best_epoch": best_epoch,
     }, run / "model.pt")
+
+    with (run / "params.txt").open("a", encoding="utf-8") as f:
+        f.write(f"Best epoch: {best_epoch}\n")
 
 
 

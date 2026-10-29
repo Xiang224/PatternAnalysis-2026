@@ -26,7 +26,7 @@ OUT = ROOT / "experiments" / "main" / "search_results"
 
 # Fixed training settings and search ranges.
 SEED = 0
-EPOCHS = 200
+EPOCHS = 300
 DEPTHS = [2, 3, 4, 6, 8]
 WIDTHS = [16, 32, 64]
 LRS = [0.005, 0.01, 0.02]
@@ -42,9 +42,11 @@ def train_one(data, device, depth, width, lr, drop, wd):
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 
 
-    # Train using training-node labels only.
-    model.train()
-    for epoch in range(EPOCHS):
+    # Train each epoch and keep its best validation results.
+    best_f1 = -1
+    best_loss = float("inf")
+    for epoch in range(1, EPOCHS + 1):
+        model.train()
         opt.zero_grad()
         out = model(data.x, data.edge_index)
         loss = F.cross_entropy(out[data.train_mask], data.y[data.train_mask])
@@ -52,16 +54,21 @@ def train_one(data, device, depth, width, lr, drop, wd):
         opt.step()
 
 
-    # Evaluate the final epoch on validation nodes.
-    model.eval()
-    with torch.no_grad():
-        out = model(data.x, data.edge_index)[data.val_mask]
-        y = data.y[data.val_mask]
-        pred = out.argmax(dim=1)
-        loss = F.cross_entropy(out, y).item()
-        acc = (pred == y).float().mean().item()
-        f1 = f1_score(y.cpu(), pred.cpu(), labels=[0, 1, 2, 3],
-                      average="macro", zero_division=0)
+        model.eval()
+        with torch.no_grad():
+            out = model(data.x, data.edge_index)[data.val_mask]
+            y = data.y[data.val_mask]
+            pred = out.argmax(dim=1)
+            loss = F.cross_entropy(out, y).item()
+            acc = (pred == y).float().mean().item()
+            f1 = f1_score(y.cpu(), pred.cpu(), labels=[0, 1, 2, 3],
+                          average="macro", zero_division=0)
+
+        if f1 > best_f1 or (f1 == best_f1 and loss < best_loss):
+            best_f1 = f1
+            best_loss = loss
+            best_acc = acc
+            best_epoch = epoch
 
     return {
         "depth": depth,
@@ -69,9 +76,10 @@ def train_one(data, device, depth, width, lr, drop, wd):
         "learning_rate": lr,
         "dropout": drop,
         "weight_decay": wd,
-        "val_accuracy": acc,
-        "val_macro_f1": f1,
-        "val_loss": loss,
+        "val_accuracy": best_acc,
+        "val_macro_f1": best_f1,
+        "val_loss": best_loss,
+        "best_epoch": best_epoch,
     }
 
 
@@ -84,7 +92,7 @@ def main():
 
     columns = [
         "depth", "hidden_dim", "learning_rate", "dropout", "weight_decay",
-        "val_accuracy", "val_macro_f1", "val_loss",
+        "val_accuracy", "val_macro_f1", "val_loss", "best_epoch",
     ]
     best = None
 
@@ -111,7 +119,7 @@ def main():
 
     # Save readable parameters for manual use in train.py.
     with (OUT / "best_params.txt").open("w", encoding="utf-8") as f:
-        f.write("Selection: highest final-epoch validation macro F1; ties use lower validation loss.\n")
+        f.write("Selection: highest validation macro F1 across epochs; ties use lower validation loss.\n")
         f.write(f"Epochs per combination: {EPOCHS}\nSeed: {SEED}\n")
         f.write("Split: 70% training / 10% validation / 20% test\nOptimizer: Adam\n")
         f.write(f"Depths searched: {DEPTHS}\nHidden widths searched: {WIDTHS}\n")
