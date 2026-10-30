@@ -1,4 +1,4 @@
-"""Train one GCN and save its settings, history, cost and weights."""
+"""Train the GCN and save results."""
 
 import csv
 import platform
@@ -17,14 +17,14 @@ from modules import GCN
 
 
 
-# Folders relative to this file.
+# Local paths.
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data" / "facebook.npz"
 PARAM_FILE = ROOT / "experiments" / "main" / "search_results" / "best_params.txt"
 OUT = ROOT / "training_results"
 
 
-# True: read search results. False: use the custom parameters below.
+# True: search parameters. False: PARAMS.
 USE_SEARCH = True
 PARAMS = {
     "depth": 4,
@@ -40,6 +40,7 @@ EPOCHS = 300
 
 
 def metrics(out, y):
+    """Calculate loss, accuracy and macro F1."""
     pred = out.argmax(dim=1)
     loss = F.cross_entropy(out, y).item()
     acc = (pred == y).float().mean().item()
@@ -50,7 +51,7 @@ def metrics(out, y):
 
 
 def main():
-    # Read the five parameters, or keep the custom values.
+    """Train and save the best validation checkpoint."""
     params = PARAMS.copy()
     source = "Custom values in train.py"
     if USE_SEARCH:
@@ -66,7 +67,7 @@ def main():
 
 
 
-    # Load the whole graph with the fixed training/validation/test split.
+    # Load the graph and fixed split.
     torch.manual_seed(SEED)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     data = load_graph(DATA, seed=SEED).to(device)
@@ -75,7 +76,7 @@ def main():
 
 
 
-    # Build the model and Adam optimiser.
+    # Build model and optimiser.
     model = GCN(data.num_node_features, params["hidden_dim"],
                 params["depth"], params["dropout"]).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=params["learning_rate"],
@@ -85,7 +86,7 @@ def main():
 
 
 
-    # Save the settings actually used for this run.
+    # Save run settings.
     with (run / "params.txt").open("w", encoding="utf-8") as f:
         f.write(f"Source: {source}\n")
 
@@ -107,7 +108,7 @@ def main():
         f.write("\nCheckpoint: best validation macro F1; ties use lower loss\n")
         f.write("Early stopping: no\n")
 
-    # Start timing and GPU memory recording after setup.
+    # Measure time and GPU memory.
     if device == "cuda":
         torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
@@ -115,7 +116,7 @@ def main():
 
 
 
-    # Train for the fixed number of epochs and save each epoch's metrics.
+    # Train and record each epoch.
     best_f1 = -1
     best_loss = float("inf")
     columns = ["epoch", "train_loss", "train_accuracy", "train_macro_f1",
@@ -134,14 +135,14 @@ def main():
             opt.step()
 
 
-            # Evaluate both splits with dropout disabled after the update.
+            # Evaluate with dropout off.
             model.eval()
             with torch.no_grad():
                 out = model(data.x, data.edge_index)
                 train = metrics(out[data.train_mask], data.y[data.train_mask])
                 val = metrics(out[data.val_mask], data.y[data.val_mask])
 
-            # Keep an independent copy of the best validation weights.
+            # Keep the best validation checkpoint.
             if val[2] > best_f1 or (val[2] == best_f1 and val[0] < best_loss):
                 best_f1 = val[2]
                 best_loss = val[0]
@@ -159,7 +160,7 @@ def main():
 
 
 
-    # Save the best weights and the information needed to rebuild the model.
+    # Save weights and model settings.
     torch.save({
         "weights": best_weights,
         "params": params,
@@ -173,7 +174,7 @@ def main():
 
 
 
-    # Save training cost and software versions. MB uses 1,000,000 bytes.
+    # Save cost and versions; MB = 1,000,000 bytes.
     memory = 0.0
     name = platform.processor()
     if device == "cuda":

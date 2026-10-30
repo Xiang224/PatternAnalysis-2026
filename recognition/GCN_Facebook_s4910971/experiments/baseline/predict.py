@@ -1,4 +1,4 @@
-"""Evaluate one trained MLP and save data for later analysis."""
+"""Evaluate the MLP and save predictions."""
 
 import argparse
 import csv
@@ -18,7 +18,7 @@ from experiments.baseline.model import MLP
 
 
 
-# Default model when --model is not supplied.
+# Default checkpoint.
 MODEL = ROOT / "training_results" / "mlp_20261029_210341" / "model.pt"
 CLASSES = ["company", "government", "politician", "tvshow"]
 
@@ -28,7 +28,7 @@ REPEATS = 100
 
 
 def main():
-    # Select a checkpoint from the run parameters.
+    """Evaluate a checkpoint and save predictions."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=Path, default=MODEL)
     args = parser.parse_args()
@@ -37,7 +37,7 @@ def main():
 
 
 
-    # Restore the training split and model settings from the checkpoint.
+    # Restore model and split.
     device = "cuda" if torch.cuda.is_available() else "cpu"
     ckpt = torch.load(path, map_location="cpu", weights_only=True)
     params = ckpt["params"]
@@ -50,7 +50,7 @@ def main():
 
 
 
-    # Time whole-graph forward passes after warming up the device.
+    # Time forward passes after warm-up.
     with torch.no_grad():
         for _ in range(WARMUP):
             model(data.x)
@@ -68,7 +68,7 @@ def main():
 
 
 
-    # Convert class scores to probabilities for all nodes.
+    # Convert scores to probabilities.
     prob = out.cpu().softmax(dim=1)
     pred = prob.argmax(dim=1)
     y = data.y.cpu()
@@ -90,7 +90,7 @@ def main():
 
 
 
-    # Save node IDs, labels and probabilities.
+    # Save validation and test predictions.
     columns = ["node", "split", "true", "pred"]
     columns += [f"p_{name}" for name in CLASSES]
 
@@ -108,7 +108,7 @@ def main():
 
 
 
-    # Extract the last hidden layer. Dropout is off during evaluation.
+    # Extract last-hidden-layer features.
     with torch.no_grad():
         x = F.relu(model.fc1(data.x))
         x = F.relu(model.fc2(x))
@@ -123,11 +123,16 @@ def main():
 
 
 
-    # Save the model reference and inference time.
+    # Save inference time.
     with (folder / "predict_info.txt").open("w", encoding="utf-8") as f:
         f.write(f"Model: {path.parent.name}\n")
         f.write(f"Device: {device}\n")
         f.write(f"Inference (ms/graph): {ms:.4f}\n")
+
+
+    print(report)
+    print(f"Macro AUROC: {auc:.4f}")
+    print(f"Saved: {folder}")
 
 
 

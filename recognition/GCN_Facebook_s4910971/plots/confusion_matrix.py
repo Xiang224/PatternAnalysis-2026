@@ -1,3 +1,5 @@
+"""Plot test confusion matrices."""
+
 import csv
 from pathlib import Path
 
@@ -5,7 +7,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix
 
 
-# Select the saved runs and data split.
+# Saved runs and split.
 ROOT = Path(__file__).resolve().parents[1]
 OUT = Path(__file__).resolve().parent / "figures"
 RUNS = {
@@ -19,7 +21,7 @@ CLASSES = ["company", "government", "politician", "tvshow"]
 fig, axes = plt.subplots(1, 2, figsize=(11, 4))
 
 for ax, name in zip(axes, RUNS):
-    # Read true and predicted classes.
+    # Read saved predictions.
     true = []
     pred = []
     path = RUNS[name] / "prediction" / "predictions.csv"
@@ -29,11 +31,10 @@ for ax, name in zip(axes, RUNS):
                 true.append(row["true"])
                 pred.append(row["pred"])
 
-    # Calculate counts and percentages within each true class.
+    # Counts and percentages within each true class.
     counts = confusion_matrix(true, pred, labels=CLASSES)
     shares = confusion_matrix(true, pred, labels=CLASSES, normalize="true")
 
-    # Plot with a single yellow colormap (light to dark).
     ax.imshow(shares, cmap="Blues", vmin=0, vmax=1)
 
     for i in range(len(CLASSES)):

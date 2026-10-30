@@ -1,3 +1,5 @@
+"""Plot training and validation curves."""
+
 import csv
 from pathlib import Path
 
@@ -36,6 +38,7 @@ for row, model_name in enumerate(RUNS):
     for row_data in data:
         epochs.append(int(row_data["epoch"]))
 
+    # Read the selected checkpoint epoch.
     best_epoch = 0
     params_path = run_folder / "params.txt"
     with params_path.open(encoding="utf-8") as f:

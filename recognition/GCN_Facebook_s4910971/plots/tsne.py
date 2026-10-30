@@ -1,3 +1,5 @@
+"""Plot test embeddings with ground-truth colours."""
+
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -16,13 +18,14 @@ SEED = 0
 fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
 
 for ax, name in zip(axes, RUNS):
-    # Read last-hidden-layer features and ground-truth labels.
+    # Read hidden features and true labels.
     path = RUNS[name] / "prediction" / "embeddings.pt"
     data = torch.load(path, map_location="cpu", weights_only=True)
     mask = data[f"{SPLIT}_mask"]
     x = data["x"][mask].numpy()
     y = data["y"][mask].numpy()
 
+    # Reduce hidden features to two dimensions.
     xy = TSNE(perplexity=30, random_state=SEED).fit_transform(x)
 
 

@@ -1,3 +1,5 @@
+"""Compare review thresholds on validation predictions."""
+
 import csv
 from pathlib import Path
 
@@ -10,6 +12,7 @@ PRED = RUN / "prediction"
 CLASSES = ["company", "government", "politician", "tvshow"]
 
 
+# Read saved validation predictions.
 data = []
 predictions_path = PRED / "predictions.csv"
 with predictions_path.open(newline="", encoding="utf-8") as f:
@@ -25,6 +28,7 @@ with predictions_path.open(newline="", encoding="utf-8") as f:
 print(f"{SPLIT}: {len(data)} nodes")
 print(f"{'Threshold':>9} {'Auto accuracy':>14} {'Review count':>14} {'Review %':>10}")
 
+# Accept predictions at or above each threshold.
 for threshold in THRESHOLDS:
     automatic = []
     for score, correct in data:

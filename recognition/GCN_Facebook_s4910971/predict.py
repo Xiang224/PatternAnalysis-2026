@@ -1,4 +1,4 @@
-"""Evaluate one trained GCN and save data for later analysis."""
+"""Evaluate the GCN and save predictions."""
 
 import argparse
 import csv
@@ -14,7 +14,7 @@ from modules import GCN, normalise_edges
 
 
 
-# Default model when --model is not supplied.
+# Default checkpoint.
 ROOT = Path(__file__).resolve().parent
 MODEL = ROOT / "training_results" / "gcn_20261030_002758" / "model.pt"
 CLASSES = ["company", "government", "politician", "tvshow"]
@@ -25,7 +25,7 @@ REPEATS = 100
 
 
 def main():
-    # Select a checkpoint from the run parameters.
+    """Evaluate a checkpoint and save predictions."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=Path, default=MODEL)
     parser.add_argument("--threshold", type=float, default=0.85)
@@ -35,7 +35,7 @@ def main():
 
 
 
-    # Restore the training split and model settings from the checkpoint.
+    # Restore model and split.
     device = "cuda" if torch.cuda.is_available() else "cpu"
     ckpt = torch.load(path, map_location="cpu", weights_only=True)
     params = ckpt["params"]
@@ -48,7 +48,7 @@ def main():
 
 
 
-    # Time whole-graph forward passes after warming up the device.
+    # Time forward passes after warm-up.
     with torch.no_grad():
         for _ in range(WARMUP):
             model(data.x, data.edge_index)
@@ -66,7 +66,7 @@ def main():
 
 
 
-    # Convert class scores to probabilities for all nodes.
+    # Convert scores to probabilities.
     prob = out.cpu().softmax(dim=1)
     pred = prob.argmax(dim=1)
     y = data.y.cpu()
@@ -88,7 +88,7 @@ def main():
 
 
 
-    # Save node IDs, labels and probabilities.
+    # Save validation and test predictions.
     columns = ["node", "split", "true", "pred"]
     columns += [f"p_{name}" for name in CLASSES]
 
@@ -106,7 +106,7 @@ def main():
 
 
 
-    # Save low-confidence validation and test predictions.
+    # Flag low-confidence predictions.
     with (folder / "low_confidence.csv").open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["node", "split", "true", "pred", "confidence"])
@@ -123,7 +123,7 @@ def main():
 
 
 
-    # Extract the last hidden layer. Dropout is off during evaluation.
+    # Extract last-hidden-layer features.
     with torch.no_grad():
         source, target, coef = normalise_edges(data.edge_index, data.num_nodes, data.x.dtype)
         x = data.x
@@ -140,12 +140,17 @@ def main():
 
 
 
-    # Save the model reference and inference time.
+    # Save inference time.
     with (folder / "predict_info.txt").open("w", encoding="utf-8") as f:
         f.write(f"Model: {path.parent.name}\n")
         f.write(f"Device: {device}\n")
         f.write(f"Inference (ms/graph): {ms:.4f}\n")
         f.write(f"Threshold: {args.threshold}\n")
+
+
+    print(report)
+    print(f"Macro AUROC: {auc:.4f}")
+    print(f"Saved: {folder}")
 
 
 

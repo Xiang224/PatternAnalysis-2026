@@ -1,4 +1,4 @@
-"""Search GCN parameters and save validation results."""
+"""Search GCN hyperparameters."""
 
 import csv
 import sys
@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from sklearn.metrics import f1_score
 
 
-# Import the model and data loader from the project folder.
+# Import project modules.
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
@@ -19,12 +19,12 @@ from modules import GCN
 
 
 
-# Data and output folders.
+# Local paths.
 DATA = ROOT / "data" / "facebook.npz"
 OUT = ROOT / "experiments" / "main" / "search_results"
 
 
-# Fixed training settings and search ranges.
+# Search settings.
 SEED = 0
 EPOCHS = 300
 DEPTHS = [2, 3, 4, 6, 8]
@@ -36,13 +36,13 @@ DECAYS = [0.0, 0.0005, 0.005]
 
 
 def train_one(data, device, depth, width, lr, drop, wd):
-    # Create a model with the same seed for each combination.
+    """Train one combination with a fixed seed."""
     torch.manual_seed(SEED)
     model = GCN(data.num_node_features, width, depth, drop).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 
 
-    # Train each epoch and keep its best validation results.
+    # Train and check validation performance.
     best_f1 = -1
     best_loss = float("inf")
     for epoch in range(1, EPOCHS + 1):
@@ -85,7 +85,7 @@ def train_one(data, device, depth, width, lr, drop, wd):
 
 
 def main():
-    # Load the fixed graph and create the output folder.
+    """Search combinations and save selected parameters."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     data = load_graph(DATA, seed=SEED).to(device)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -97,7 +97,7 @@ def main():
     best = None
 
 
-    # Train all combinations and save one row for each.
+    # Save one row per combination.
     with (OUT / "summary.csv").open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=columns)
         writer.writeheader()
@@ -107,7 +107,7 @@ def main():
             writer.writerow(row)
             f.flush()
 
-            # Prefer higher macro F1, then lower loss if F1 is equal.
+            # Select by macro F1, then loss.
             if best is None:
                 best = row
             elif row["val_macro_f1"] > best["val_macro_f1"]:
@@ -117,7 +117,7 @@ def main():
                     best = row
 
 
-    # Save readable parameters for manual use in train.py.
+    # Save selected parameters.
     with (OUT / "best_params.txt").open("w", encoding="utf-8") as f:
         f.write("Selection: highest validation macro F1 across epochs; ties use lower validation loss.\n")
         f.write(f"Epochs per combination: {EPOCHS}\nSeed: {SEED}\n")

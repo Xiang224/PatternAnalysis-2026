@@ -1,3 +1,5 @@
+"""Plot confidence percentages for correct and wrong predictions."""
+
 import csv
 from pathlib import Path
 
@@ -35,6 +37,7 @@ for ax, name in zip(axes, RUNS):
                     wrong.append(confidence)
 
 
+    # Normalise correct and wrong groups separately.
     ax.hist(correct, bins=BINS, weights=[1 / len(correct)] * len(correct),
             alpha=0.5, label="Correct")
     ax.hist(wrong, bins=BINS, weights=[1 / len(wrong)] * len(wrong),
