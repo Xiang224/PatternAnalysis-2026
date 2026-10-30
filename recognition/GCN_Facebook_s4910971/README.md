@@ -329,6 +329,8 @@ Of the seven thresholds tested, 0.85 refers 8.99% of validation nodes for review
 
 Increasing the threshold from 0.85 to 0.95 improves automatic-processing accuracy by only 0.87 percentage points, while the review count almost doubles from 202 to 403. At 0.99, accuracy exceeds 99%, but the proportion requiring human review also increases substantially.
 
+With the threshold fixed at 0.85 based on the validation results, 4,108 of the 4,494 test nodes (91.41%) are handled automatically, with 97.25% accuracy. The remaining 386 nodes (8.59%) are referred for human review. This meets the project targets of handling at least 90% of predictions automatically with at least 95% accuracy in that group.
+
 ### 6.7 Engineering recommendation and limitations
 
 #### Research question 3: Is the GCN's additional cost worthwhile?
@@ -345,6 +347,13 @@ The current model uses a transductive setting and achieves good classification r
 
 ## 7. Artificial Intelligence Usage Disclosure
 
+I used Codex and GPT-6.1 to help generate the initial versions of search.py, train.py, and predict.py for both the GCN and baseline implementations. Before generating the code, I set the main experiment settings, including the hyperparameters and candidate values for the grid search, the combinations to test, the number of training epochs, and the random seed. I also chose the Adam optimiser and its learning rate and weight decay settings. The method for selecting the best parameters and using them in training was specified by me or agreed through discussion with AI.
+
+I specified a transductive learning setup with full-batch training on my local GPU and no early stopping. The loss function, training and validation metrics, and use of dropout and softmax were also specified or confirmed through these discussions. Dropout was enabled during training and disabled during prediction, while softmax was used to obtain class probabilities.
+
+To support later plotting and analysis, I requested that training and validation metrics be recorded at every epoch. I also discussed with AI what other information to save, including model weights, experiment settings, predictions, and runtime information, as well as the saving methods and file formats. Most other implementation choices were also discussed with me before being confirmed.
+
+After the initial code was generated, I reviewed it based on my understanding of the training and prediction process. I rewrote some sections to make them easier for me to follow and addressed potential issues. For example, I changed the model-saving procedure to save the model from the epoch with the best validation performance instead of the final epoch. I compared the results from the two approaches and found little difference. I also checked whether the code followed the intended transductive setup, focusing on how training, validation, and test labels were used and whether their use could introduce data leakage.
 ## References
 
 [A] COMP3710 / COMP7710 Final Assessment Specification v2.5, Sections 2.1, 3, 5.3 and 6.1.
