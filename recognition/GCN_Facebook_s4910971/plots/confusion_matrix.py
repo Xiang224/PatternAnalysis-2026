@@ -34,7 +34,7 @@ for ax, name in zip(axes, RUNS):
     shares = confusion_matrix(true, pred, labels=CLASSES, normalize="true")
 
     # Plot with a single yellow colormap (light to dark).
-    ax.imshow(shares, cmap="Wistia", vmin=0, vmax=1)
+    ax.imshow(shares, cmap="Blues", vmin=0, vmax=1)
 
     for i in range(len(CLASSES)):
         for j in range(len(CLASSES)):
