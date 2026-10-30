@@ -153,6 +153,19 @@ def main():
     print(f"Saved: {folder}")
 
 
+    # Summarise test predictions at the chosen threshold.
+    automatic = prob[test].max(dim=1).values >= args.threshold
+    count = int(automatic.sum())
+    total = int(test.sum())
+    accuracy = (pred[test][automatic] == y[test][automatic]).float().mean().item()
+    review = total - count
+
+    print(f"\nTest: {total} nodes, threshold = {args.threshold:.2f}")
+    print(f"Automatic: {count} ({count / total:.2%})")
+    print(f"Auto accuracy: {accuracy:.2%}")
+    print(f"Review: {review} ({review / total:.2%})")
+
+
 
 if __name__ == "__main__":
     main()
