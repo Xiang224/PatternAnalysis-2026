@@ -187,7 +187,7 @@ The project uses the course-specified Gayanku FacebookPagePage dataset, stored a
 | ---: | ---: | ---: | ---: |
 | 6,495 | 6,880 | 5,768 | 3,327 |
 
-The released features have already been reduced to 128 dimensions using SVD. The loader converts features to `float32`, labels and edge indices to integer tensors, then constructs a PyG `Data` object.
+The supplied features were already reduced to 128 dimensions using SVD. We converted features to `float32` tensors and labels and edge indices to integer tensors, then loaded them into a PyG `Data` object. No further feature preprocessing was applied.
 
 ### Splits and their roles
 
