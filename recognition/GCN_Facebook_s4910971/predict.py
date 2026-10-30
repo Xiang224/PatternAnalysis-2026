@@ -28,7 +28,7 @@ def main():
     # Select a checkpoint from the run parameters.
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=Path, default=MODEL)
-    parser.add_argument("--threshold", type=float, default=0.8)
+    parser.add_argument("--threshold", type=float, default=0.85)
     args = parser.parse_args()
     path = ROOT / args.model
     folder = path.parent / "prediction"
